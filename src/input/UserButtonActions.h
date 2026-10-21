@@ -14,13 +14,14 @@ enum UserButtonAction : uint8_t {
     BUTTON_ACTION_ACK_OR_ALERT,   // ack a running notification, otherwise send alert
 };
 
-enum UserButtonGesture : uint8_t { USER_BUTTON_SINGLE, USER_BUTTON_DOUBLE };
+enum UserButtonGesture : uint8_t { USER_BUTTON_SINGLE, USER_BUTTON_DOUBLE, USER_BUTTON_MULTI };
 
 // Fields mirror the proposed UserButtonConfig protobuf message.
 struct UserButtonActionsConfig {
     bool enabled;
     UserButtonAction single_press;
     UserButtonAction double_press;
+    UserButtonAction multi_press; // three or more presses
     const char *alert_text;
     const char *ack_text; // nullptr = no ack message
     bool alert_with_position;
@@ -33,6 +34,9 @@ struct UserButtonActionsConfig {
 #endif
 #ifndef UBA_DOUBLE_PRESS
 #define UBA_DOUBLE_PRESS BUTTON_ACTION_DEFAULT
+#endif
+#ifndef UBA_MULTI_PRESS
+#define UBA_MULTI_PRESS BUTTON_ACTION_DEFAULT
 #endif
 #ifndef UBA_ALERT_TEXT
 #define UBA_ALERT_TEXT "\x07HELP"
@@ -62,6 +66,7 @@ inline const UserButtonActionsConfig &userButtonActionsConfig()
 #endif
         UBA_SINGLE_PRESS,
         UBA_DOUBLE_PRESS,
+        UBA_MULTI_PRESS,
         UBA_ALERT_TEXT,
         UBA_ACK_TEXT,
         UBA_ALERT_WITH_POSITION != 0,
@@ -83,14 +88,22 @@ enum UserButtonOutcome : uint8_t {
 struct UserButtonRateLimiter {
     bool sent = false;
     uint32_t lastMs = 0;
+    void alertSent(uint32_t nowMs)
+    {
+        sent = true;
+        lastMs = nowMs;
+    }
 };
 
 inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig &config, UserButtonGesture gesture, bool nagging,
-                                                  uint32_t nowMs, UserButtonRateLimiter &limiter)
+                                                  uint32_t nowMs, const UserButtonRateLimiter &limiter)
 {
     if (!config.enabled)
         return UBA_OUTCOME_STOCK;
-    switch (gesture == USER_BUTTON_SINGLE ? config.single_press : config.double_press) {
+    UserButtonAction action = gesture == USER_BUTTON_SINGLE   ? config.single_press
+                              : gesture == USER_BUTTON_DOUBLE ? config.double_press
+                                                              : config.multi_press;
+    switch (action) {
     case BUTTON_ACTION_NONE:
         return UBA_OUTCOME_IGNORE;
     case BUTTON_ACTION_ADHOC_POSITION:
@@ -102,9 +115,7 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig 
     case BUTTON_ACTION_SEND_ALERT:
         if (limiter.sent && nowMs - limiter.lastMs < config.alert_min_interval_secs * 1000)
             return UBA_OUTCOME_RATE_LIMITED;
-        limiter.sent = true;
-        limiter.lastMs = nowMs;
-        return UBA_OUTCOME_ALERT;
+        return UBA_OUTCOME_ALERT; // caller calls limiter.alertSent() once the alert went out
     default:
         return UBA_OUTCOME_STOCK;
     }
