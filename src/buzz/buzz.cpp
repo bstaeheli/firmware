@@ -239,6 +239,18 @@ void resetLeadUpSequence()
     leadUpNoteIndex = 0;
 }
 
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+// Soft, friendly up-and-down jingle (C major, mid range) for "button held, nothing was sent"
+bool playHintNote(int index)
+{
+    static const ToneDuration hintNotes[] = {{NOTE_C5, 150}, {NOTE_E5, 150}, {NOTE_G5, 150}, {NOTE_E5, 150}, {NOTE_C5, 300}};
+    if (index < 0 || index >= (int)(sizeof(hintNotes) / sizeof(ToneDuration)))
+        return false;
+    playTones(&hintNotes[index], 1);
+    return true;
+}
+#endif
+
 void playComboTune()
 {
     // Quick high-pitched notes with trills

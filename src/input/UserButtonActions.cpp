@@ -7,6 +7,7 @@
 #include "Router.h"
 #include "UserButtonActions.h"
 #include "buzz/BuzzerFeedbackThread.h"
+#include "buzz/buzz.h"
 #include "modules/ExternalNotificationModule.h"
 
 // Same packet construction as CannedMessageModule::sendText, but broadcast on the primary channel without ack
@@ -39,16 +40,29 @@ static void playFeedback(input_broker_event event)
     buzzerFeedbackThread->handleInputEvent(&evt);
 }
 
-bool userButtonActionsHandle(UserButtonGesture gesture)
+static UserButtonState state;
+static const int HINT_OFF = -1, HINT_INTERRUPTED = -2; // otherwise: next hint tune note
+static int hintNote = HINT_OFF;
+
+void userButtonActionsTick(bool buttonPressed)
 {
-    static UserButtonRateLimiter limiter;
+    if (hintNote >= 0 && buttonPressed)
+        hintNote = HINT_INTERRUPTED; // stop now, the gesture of this press only stops the tune
+    else if (hintNote >= 0 && !playHintNote(hintNote++))
+        hintNote = HINT_OFF;
+}
+
+bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_t shutdownMs)
+{
     const UserButtonActionsConfig &cfg = userButtonActionsConfig();
     // Same nag check as InputBroker::handleInputEvent
-    bool nagging =
+    state.nagging =
         externalNotificationModule && moduleConfig.external_notification.enabled && externalNotificationModule->nagging();
+    state.hintPlaying = hintNote != HINT_OFF;
+    state.nowMs = millis();
 
-    uint32_t now = millis();
-    switch (userButtonActionsResolve(cfg, gesture, nagging, now, limiter)) {
+    UserButtonOutcome outcome = userButtonActionsResolve(cfg, state, gesture, holdMs, shutdownMs);
+    switch (outcome) {
     case UBA_OUTCOME_STOCK:
         return false;
     case UBA_OUTCOME_ACK:
@@ -59,9 +73,10 @@ bool userButtonActionsHandle(UserButtonGesture gesture)
         playFeedback(INPUT_BROKER_USER_PRESS);
         break;
     case UBA_OUTCOME_ALERT:
-        LOG_INFO("User button: send alert");
-        sendTextBroadcast(cfg.alert_text);
-        limiter.alertSent(now);
+    case UBA_OUTCOME_ALERT2:
+        LOG_INFO("User button: send alert level %d", outcome == UBA_OUTCOME_ALERT2 ? 2 : 1);
+        sendTextBroadcast(outcome == UBA_OUTCOME_ALERT2 ? cfg.alert2_text : cfg.alert_text);
+        state.limiters[outcome == UBA_OUTCOME_ALERT2].alertSent(state.nowMs);
         if (cfg.alert_with_position)
             sendAdHocPosition(false);
         playFeedback(INPUT_BROKER_USER_PRESS);
@@ -74,6 +89,13 @@ bool userButtonActionsHandle(UserButtonGesture gesture)
     case UBA_OUTCOME_RATE_LIMITED:
         LOG_DEBUG("User button: alert ignored, sent less than %u s ago", (unsigned)cfg.alert_min_interval_secs);
         playFeedback(INPUT_BROKER_CANCEL);
+        break;
+    case UBA_OUTCOME_HINT:
+        LOG_INFO("User button: held too long for an alert, nothing sent");
+        hintNote = 0;
+        break;
+    case UBA_OUTCOME_STOP_HINT:
+        hintNote = HINT_OFF;
         break;
     case UBA_OUTCOME_IGNORE:
         break;

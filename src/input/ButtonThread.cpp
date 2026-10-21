@@ -149,6 +149,10 @@ int32_t ButtonThread::runOnce()
     // Check if we should play lead-up sound during long press
     // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long press triggers
     bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+    if (userButtonActionsApply(_originName))
+        userButtonActionsTick(buttonCurrentlyPressed);
+#endif
 
     // Detect start of button press
     if (buttonCurrentlyPressed && !buttonWasPressed) {
@@ -227,13 +231,6 @@ int32_t ButtonThread::runOnce()
             // Uncommon T-Echo hardware bug, LoRa TX triggers touch button
             if (_touchQuirk && RadioLibInterface::instance && RadioLibInterface::instance->isSending())
                 break;
-#if MESHTASTIC_USER_BUTTON_ACTIONS
-            // Holding the button acts as a single press right away (OneButton reports no click after a long press)
-            if (userButtonActionsApply(_originName) && userButtonActionsHandle(USER_BUTTON_SINGLE)) {
-                waitingForLongPress = false;
-                break;
-            }
-#endif
 
             // Check if this is part of a short-press + long-press combination
             if (_shortLong != INPUT_BROKER_NONE && waitingForLongPress &&
@@ -324,6 +321,11 @@ int32_t ButtonThread::runOnce()
         case BUTTON_EVENT_LONG_RELEASED: {
 
             LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+            // Shorter holds alert or play the hint; holds reaching the shutdown time fall through to stock shutdown
+            if (userButtonActionsApply(_originName))
+                userButtonActionsHandle(USER_BUTTON_HOLD, millis() - buttonPressStartTime, _longLongPressTime);
+#endif
             // Require press started after boot holdoff to avoid phantom shutdown from floating pins
             if (millis() > 30000 && buttonPressStartTime > 30000 && _longLongPress != INPUT_BROKER_NONE &&
                 (millis() - buttonPressStartTime) >= _longLongPressTime && leadUpPlayed) {
