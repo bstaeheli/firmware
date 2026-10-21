@@ -19,6 +19,12 @@
 #endif
 #if MESHTASTIC_USER_BUTTON_ACTIONS
 #include "input/UserButtonActions.h"
+
+// Only the user button of devices without a screen; with a screen it navigates the UI
+static bool userButtonActionsApply(const char *origin)
+{
+    return !screen && strcmp(origin, "UserButton") == 0;
+}
 #endif
 
 using namespace concurrency;
@@ -45,7 +51,8 @@ bool ButtonThread::initButton(const ButtonConfig &config)
     _suppressLeadUp = config.suppressLeadUpSound;
     _longLongPress = config.longLongPress;
 #if MESHTASTIC_USER_BUTTON_ACTIONS
-    if (_longLongPress == INPUT_BROKER_SHUTDOWN && userButtonActionsConfig().long_press_shutdown_ms)
+    if (userButtonActionsApply(_originName) && _longLongPress == INPUT_BROKER_SHUTDOWN &&
+        userButtonActionsConfig().long_press_shutdown_ms)
         _longLongPressTime = userButtonActionsConfig().long_press_shutdown_ms;
 #endif
 
@@ -194,7 +201,7 @@ int32_t ButtonThread::runOnce()
         switch (btnEvent) {
         case BUTTON_EVENT_PRESSED: {
 #if MESHTASTIC_USER_BUTTON_ACTIONS
-            if (strcmp(_originName, "UserButton") == 0 && userButtonActionsHandle(USER_BUTTON_SINGLE))
+            if (userButtonActionsApply(_originName) && userButtonActionsHandle(USER_BUTTON_SINGLE))
                 break;
 #endif
             // Forward single press to InputBroker (but NOT as DOWN/SELECT, just forward a "button press" event)
@@ -239,7 +246,7 @@ int32_t ButtonThread::runOnce()
         case BUTTON_EVENT_DOUBLE_PRESSED: { // not wired in if screen detected
             LOG_INFO("Double press!");
 #if MESHTASTIC_USER_BUTTON_ACTIONS
-            if (strcmp(_originName, "UserButton") == 0 && userButtonActionsHandle(USER_BUTTON_DOUBLE)) {
+            if (userButtonActionsApply(_originName) && userButtonActionsHandle(USER_BUTTON_DOUBLE)) {
                 waitingForLongPress = false;
                 break;
             }
@@ -258,6 +265,12 @@ int32_t ButtonThread::runOnce()
 
         case BUTTON_EVENT_MULTI_PRESSED: { // not wired in when screen is present
             LOG_INFO("Mulitipress! %hux", multipressClickCount);
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+            if (userButtonActionsApply(_originName) && userButtonActionsHandle(USER_BUTTON_MULTI)) {
+                waitingForLongPress = false;
+                break;
+            }
+#endif
 
             // Reset combination tracking
             waitingForLongPress = false;
@@ -297,6 +310,11 @@ int32_t ButtonThread::runOnce()
         case BUTTON_EVENT_LONG_RELEASED: {
 
             LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+            // A hold released before the shutdown time counts as a single press
+            if (userButtonActionsApply(_originName) && (millis() - buttonPressStartTime) < _longLongPressTime)
+                userButtonActionsHandle(USER_BUTTON_SINGLE);
+#endif
             // Require press started after boot holdoff to avoid phantom shutdown from floating pins
             if (millis() > 30000 && buttonPressStartTime > 30000 && _longLongPress != INPUT_BROKER_NONE &&
                 (millis() - buttonPressStartTime) >= _longLongPressTime && leadUpPlayed) {
