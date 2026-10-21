@@ -127,9 +127,19 @@ struct UserButtonState {
     bool hintPlaying = false;   // hint tune running
     bool pressConsumed = false; // this press stopped a melody, ignore its gesture
     uint32_t lastPressedMs = 0; // last time the button was seen pressed
+    bool downSeen = false;      // button-down of the current press was observed
+    bool nagAtDown = false;     // nag state at that button-down
     uint32_t nowMs = 0;
     UserButtonRateLimiter limiters[2]; // per alert level
 };
+
+static const int UBA_HINT_NOTES = 5;
+
+// Hint tune note after the given one, -1 = tune over
+inline int userButtonActionsNextHintNote(int note)
+{
+    return note >= 0 && note + 1 < UBA_HINT_NOTES ? note + 1 : -1;
+}
 
 // OneButton reports a gesture 250 ms (BUTTON_CLICK_MS) after the last release; margin included
 static const uint32_t UBA_GESTURE_TIMEOUT_MS = 1000;
@@ -139,6 +149,8 @@ inline void userButtonActionsPressStart(UserButtonState &state)
 {
     if (state.pressConsumed && state.nowMs - state.lastPressedMs > UBA_GESTURE_TIMEOUT_MS)
         state.pressConsumed = false;
+    state.downSeen = true;
+    state.nagAtDown = state.nagging;
 }
 
 // holdMs: how long a USER_BUTTON_HOLD lasted; shutdownMs: effective long-press shutdown time
@@ -158,7 +170,10 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig 
     }
     if (state.pressConsumed)
         return UBA_OUTCOME_IGNORE;
-    if (state.hintPlaying)
+    // Decide on the state at button-down: a nag or hint tune starting later does not change this press. Without an
+    // observed button-down, fall back to the current state.
+    const bool nagging = state.downSeen ? state.nagAtDown : state.nagging;
+    if (!state.downSeen && state.hintPlaying)
         return UBA_OUTCOME_STOP_HINT;
 
     UserButtonAction action;
@@ -176,7 +191,7 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig 
         if (!config.hold_alert_max_ms || config.single_press == BUTTON_ACTION_DEFAULT || holdMs >= shutdownMs)
             return UBA_OUTCOME_STOCK;
         if (holdMs >= config.hold_alert_max_ms)
-            return UBA_OUTCOME_HINT;
+            return state.nagging ? UBA_OUTCOME_IGNORE : UBA_OUTCOME_HINT; // no hint tune over a notification
         action = config.single_press;
         break;
     }
@@ -189,7 +204,7 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig 
         return UBA_OUTCOME_POSITION;
     case BUTTON_ACTION_ACK_OR_ALERT:
     case BUTTON_ACTION_ACK_OR_ALERT2:
-        if (state.nagging)
+        if (nagging)
             return UBA_OUTCOME_ACK;
         // fall through
     case BUTTON_ACTION_SEND_ALERT:

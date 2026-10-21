@@ -245,13 +245,13 @@ void resetLeadUpSequence()
 
 #if MESHTASTIC_USER_BUTTON_ACTIONS
 // Soft, friendly up-and-down jingle (C major, mid range) for "button held, nothing was sent"
-bool playHintNote(int index)
+void playHintNote(int index)
 {
     static const ToneDuration hintNotes[] = {{NOTE_C5, 150}, {NOTE_E5, 150}, {NOTE_G5, 150}, {NOTE_E5, 150}, {NOTE_C5, 300}};
-    if (index < 0 || index >= (int)(sizeof(hintNotes) / sizeof(ToneDuration)))
-        return false;
+    static_assert(sizeof(hintNotes) / sizeof(hintNotes[0]) == UBA_HINT_NOTES, "one entry per hint note");
+    if (index < 0 || index >= UBA_HINT_NOTES)
+        return;
     playTones(&hintNotes[index], 1);
-    return true;
 }
 
 // Slowly rising scale towards the long-press shutdown

@@ -46,8 +46,10 @@ static int leadUpNote = -1; // last count-up note played during this press
 
 bool userButtonActionsTick(bool buttonPressed, uint32_t holdMs)
 {
-    if (hintNote >= 0 && !playHintNote(hintNote++))
-        hintNote = -1;
+    if (hintNote >= 0) {
+        playHintNote(hintNote);
+        hintNote = userButtonActionsNextHintNote(hintNote);
+    }
 
     if (buttonPressed)
         state.lastPressedMs = millis();
@@ -81,6 +83,7 @@ bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_
             state.pressConsumed = true; // until the gesture of this press (or click series) is reported
     } else {
         state.pressConsumed = false; // the gesture ends the press
+        state.downSeen = false;
     }
     switch (outcome) {
     case UBA_OUTCOME_STOCK:

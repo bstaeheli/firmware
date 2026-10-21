@@ -184,8 +184,9 @@ static void test_release_at_3100_ms_plays_hint()
 static void test_medium_hold_plays_hint()
 {
     TEST_ASSERT_EQUAL(UBA_OUTCOME_HINT, resolve(USER_BUTTON_HOLD, 1000, 3000));
-    state.nagging = true;
     TEST_ASSERT_EQUAL(UBA_OUTCOME_HINT, resolve(USER_BUTTON_HOLD, 2000, SHUTDOWN_MS - 1));
+    state.nagging = true; // no hint tune over a running notification
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(USER_BUTTON_HOLD, 3000, 5000));
 }
 
 static void test_hold_until_shutdown_keeps_stock()
@@ -300,6 +301,56 @@ static void test_consumed_press_without_gesture_does_not_swallow_next_click()
     TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 2400));
 }
 
+// Button-down as the handler does it: snapshot the state for this press, then resolve
+static UserButtonOutcome buttonDown(uint32_t nowMs)
+{
+    state.nowMs = nowMs;
+    userButtonActionsPressStart(state);
+    return resolve(USER_BUTTON_DOWN, nowMs);
+}
+
+static void test_text_arriving_during_press_does_not_turn_help_into_ok()
+{
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, buttonDown(1000));
+    state.nagging = true; // a bell message arrives before the click is reported
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1300));
+}
+
+static void test_nag_starting_during_short_hold_still_alerts()
+{
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, buttonDown(1000));
+    state.nagging = true;
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_HOLD, 3000, 2000));
+}
+
+static void test_no_hint_over_a_nag_starting_during_hold()
+{
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, buttonDown(1000));
+    state.nagging = true;
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(USER_BUTTON_HOLD, 6000, 5000));
+}
+
+static void test_hint_ending_during_press_does_not_swallow_it()
+{
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, buttonDown(1000));
+    state.hintPlaying = true; // stale or late hint state at gesture time
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1300));
+}
+
+static void test_gesture_without_button_down_uses_current_nag()
+{
+    state.nagging = true;
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, 1000));
+}
+
+static void test_hint_tune_ends_right_after_last_note()
+{
+    TEST_ASSERT_EQUAL(1, userButtonActionsNextHintNote(0));
+    TEST_ASSERT_EQUAL(UBA_HINT_NOTES - 1, userButtonActionsNextHintNote(UBA_HINT_NOTES - 2));
+    TEST_ASSERT_EQUAL(-1, userButtonActionsNextHintNote(UBA_HINT_NOTES - 1));
+    TEST_ASSERT_EQUAL(-1, userButtonActionsNextHintNote(-1));
+}
+
 static void test_hold_reaching_shutdown_keeps_stock_shutdown()
 {
     TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 10000));
@@ -369,6 +420,12 @@ void setup()
     RUN_TEST(test_button_down_acks_only_with_ack_action);
     RUN_TEST(test_consumed_press_ends_with_its_gesture);
     RUN_TEST(test_consumed_press_without_gesture_does_not_swallow_next_click);
+    RUN_TEST(test_text_arriving_during_press_does_not_turn_help_into_ok);
+    RUN_TEST(test_nag_starting_during_short_hold_still_alerts);
+    RUN_TEST(test_no_hint_over_a_nag_starting_during_hold);
+    RUN_TEST(test_hint_ending_during_press_does_not_swallow_it);
+    RUN_TEST(test_gesture_without_button_down_uses_current_nag);
+    RUN_TEST(test_hint_tune_ends_right_after_last_note);
     RUN_TEST(test_hold_reaching_shutdown_keeps_stock_shutdown);
     RUN_TEST(test_lead_up_counts_up_to_shutdown);
     RUN_TEST(test_lead_up_never_on_a_click);
