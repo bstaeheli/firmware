@@ -52,8 +52,10 @@ bool ButtonThread::initButton(const ButtonConfig &config)
     _longLongPress = config.longLongPress;
 #if MESHTASTIC_USER_BUTTON_ACTIONS
     if (userButtonActionsApply(_originName) && _longLongPress == INPUT_BROKER_SHUTDOWN &&
-        userButtonActionsConfig().long_press_shutdown_ms)
+        userButtonActionsConfig().long_press_shutdown_ms) {
         _longLongPressTime = userButtonActionsConfig().long_press_shutdown_ms;
+        _leadUpMs = userButtonActionsLeadUpMs(_longLongPressTime, BUTTON_LEADUP_MS);
+    }
 #endif
 
     userButton = OneButton(config.pinNumber, config.activeLow, config.activePullup);
@@ -162,8 +164,13 @@ int32_t ButtonThread::runOnce()
         LOG_WARN("Button held for %u ms", millis() - buttonPressStartTime);
 #endif
 
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+    const uint32_t leadUpMs = _leadUpMs;
+#else
+    const uint32_t leadUpMs = BUTTON_LEADUP_MS;
+#endif
     // Progressive lead-up sound system
-    if (!_suppressLeadUp && buttonCurrentlyPressed && (millis() - buttonPressStartTime) >= BUTTON_LEADUP_MS) {
+    if (!_suppressLeadUp && buttonCurrentlyPressed && (millis() - buttonPressStartTime) >= leadUpMs) {
 
         // Start the progressive sequence if not already active
         if (!leadUpSequenceActive) {
@@ -220,6 +227,13 @@ int32_t ButtonThread::runOnce()
             // Uncommon T-Echo hardware bug, LoRa TX triggers touch button
             if (_touchQuirk && RadioLibInterface::instance && RadioLibInterface::instance->isSending())
                 break;
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+            // Holding the button acts as a single press right away (OneButton reports no click after a long press)
+            if (userButtonActionsApply(_originName) && userButtonActionsHandle(USER_BUTTON_SINGLE)) {
+                waitingForLongPress = false;
+                break;
+            }
+#endif
 
             // Check if this is part of a short-press + long-press combination
             if (_shortLong != INPUT_BROKER_NONE && waitingForLongPress &&
@@ -310,11 +324,6 @@ int32_t ButtonThread::runOnce()
         case BUTTON_EVENT_LONG_RELEASED: {
 
             LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
-#if MESHTASTIC_USER_BUTTON_ACTIONS
-            // A hold released before the shutdown time counts as a single press
-            if (userButtonActionsApply(_originName) && (millis() - buttonPressStartTime) < _longLongPressTime)
-                userButtonActionsHandle(USER_BUTTON_SINGLE);
-#endif
             // Require press started after boot holdoff to avoid phantom shutdown from floating pins
             if (millis() > 30000 && buttonPressStartTime > 30000 && _longLongPress != INPUT_BROKER_NONE &&
                 (millis() - buttonPressStartTime) >= _longLongPressTime && leadUpPlayed) {

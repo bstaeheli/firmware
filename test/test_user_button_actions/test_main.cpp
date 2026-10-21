@@ -87,10 +87,10 @@ static void test_ack_inside_alert_window()
     TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, true, 2000));
 }
 
-static void test_failed_alert_does_not_start_window()
+static void test_resolve_does_not_start_window()
 {
     TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, userButtonActionsResolve(cfg, USER_BUTTON_SINGLE, false, 1000, limiter));
-    // not committed via alertSent(), so the next press may retry
+    // the window starts only with alertSent(), after the alert was sent
     TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, userButtonActionsResolve(cfg, USER_BUTTON_SINGLE, false, 1100, limiter));
 }
 
@@ -133,6 +133,13 @@ static void test_zero_interval_never_limits()
     TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
 }
 
+static void test_lead_up_ends_at_shutdown_time()
+{
+    TEST_ASSERT_EQUAL_UINT32(2200, userButtonActionsLeadUpMs(0, 2200)); // no override: stock
+    TEST_ASSERT_EQUAL_UINT32(13700, userButtonActionsLeadUpMs(15000, 2200));
+    TEST_ASSERT_EQUAL_UINT32(2200, userButtonActionsLeadUpMs(1300, 2200)); // too short to shift
+}
+
 void setup()
 {
     initializeTestEnvironment();
@@ -146,13 +153,14 @@ void setup()
     RUN_TEST(test_ack_or_alert_acks_while_nagging);
     RUN_TEST(test_multi_press_uses_its_own_action);
     RUN_TEST(test_ack_inside_alert_window);
-    RUN_TEST(test_failed_alert_does_not_start_window);
+    RUN_TEST(test_resolve_does_not_start_window);
     RUN_TEST(test_ack_or_alert_alerts_when_idle);
     RUN_TEST(test_send_alert_ignores_nag);
     RUN_TEST(test_alert_rate_limited_within_interval);
     RUN_TEST(test_first_alert_allowed_right_after_boot);
     RUN_TEST(test_rate_limit_survives_millis_wraparound);
     RUN_TEST(test_zero_interval_never_limits);
+    RUN_TEST(test_lead_up_ends_at_shutdown_time);
     exit(UNITY_END());
 }
 

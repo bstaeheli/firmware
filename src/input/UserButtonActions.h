@@ -121,5 +121,13 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig 
     }
 }
 
+// When the long-press shutdown time is overridden, start the stock lead-up melody (4 notes, 400 ms apart) so that it
+// ends at the shutdown time: the melody means "release now and the device turns off".
+inline uint32_t userButtonActionsLeadUpMs(uint32_t shutdownMs, uint32_t stockLeadUpMs)
+{
+    const uint32_t leadUpDurationMs = 1300;
+    return shutdownMs > leadUpDurationMs ? shutdownMs - leadUpDurationMs : stockLeadUpMs;
+}
+
 // Runs the configured action. Returns true if the gesture was handled and stock handling must be skipped.
 bool userButtonActionsHandle(UserButtonGesture gesture);

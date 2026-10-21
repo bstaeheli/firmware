@@ -10,12 +10,8 @@
 #include "modules/ExternalNotificationModule.h"
 
 // Same packet construction as CannedMessageModule::sendText, but broadcast on the primary channel without ack
-static bool sendTextBroadcast(const char *text)
+static void sendTextBroadcast(const char *text)
 {
-    if (router->getQueueStatus().free == 0) {
-        LOG_WARN("User button: TX queue full, text not sent");
-        return false;
-    }
     meshtastic_MeshPacket *p = router->allocForSending();
     p->to = NODENUM_BROADCAST;
     p->channel = 0;
@@ -25,7 +21,6 @@ static bool sendTextBroadcast(const char *text)
     p->decoded.payload.size = strnlen(text, sizeof(p->decoded.payload.bytes));
     memcpy(p->decoded.payload.bytes, text, p->decoded.payload.size);
     service->sendToMesh(p, RX_SRC_LOCAL, true);
-    return true;
 }
 
 // Same as the stock double press (INPUT_BROKER_SEND_PING in SystemCommandsModule)
@@ -65,8 +60,7 @@ bool userButtonActionsHandle(UserButtonGesture gesture)
         break;
     case UBA_OUTCOME_ALERT:
         LOG_INFO("User button: send alert");
-        if (!sendTextBroadcast(cfg.alert_text))
-            break; // no rate-limit window, the next press retries
+        sendTextBroadcast(cfg.alert_text);
         limiter.alertSent(now);
         if (cfg.alert_with_position)
             sendAdHocPosition(false);
