@@ -41,15 +41,23 @@ static void playFeedback(input_broker_event event)
 }
 
 static UserButtonState state;
-static const int HINT_OFF = -1, HINT_INTERRUPTED = -2; // otherwise: next hint tune note
-static int hintNote = HINT_OFF;
+static int hintNote = -1;   // next hint tune note, -1 = not playing
+static int leadUpNote = -1; // last count-up note played during this press
 
-void userButtonActionsTick(bool buttonPressed)
+bool userButtonActionsTick(bool buttonPressed, uint32_t holdMs)
 {
-    if (hintNote >= 0 && buttonPressed)
-        hintNote = HINT_INTERRUPTED; // stop now, the gesture of this press only stops the tune
-    else if (hintNote >= 0 && !playHintNote(hintNote++))
-        hintNote = HINT_OFF;
+    if (hintNote >= 0 && !playHintNote(hintNote++))
+        hintNote = -1;
+
+    const UserButtonActionsConfig &cfg = userButtonActionsConfig();
+    if (!buttonPressed || state.pressConsumed || !cfg.long_press_shutdown_ms)
+        return false;
+    int due = userButtonActionsLeadUpNote(holdMs, cfg.hold_alert_max_ms, cfg.long_press_shutdown_ms);
+    if (due > leadUpNote) {
+        leadUpNote = due;
+        playCountUpNote(due);
+    }
+    return leadUpNote == UBA_LEADUP_NOTES - 1;
 }
 
 bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_t shutdownMs)
@@ -58,10 +66,17 @@ bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_
     // Same nag check as InputBroker::handleInputEvent
     state.nagging =
         externalNotificationModule && moduleConfig.external_notification.enabled && externalNotificationModule->nagging();
-    state.hintPlaying = hintNote != HINT_OFF;
+    state.hintPlaying = hintNote >= 0;
     state.nowMs = millis();
 
     UserButtonOutcome outcome = userButtonActionsResolve(cfg, state, gesture, holdMs, shutdownMs);
+    if (gesture == USER_BUTTON_DOWN) {
+        leadUpNote = -1;
+        if (outcome != UBA_OUTCOME_STOCK)
+            state.pressConsumed = true; // until the gesture of this press (or click series) is reported
+    } else {
+        state.pressConsumed = false; // the gesture ends the press
+    }
     switch (outcome) {
     case UBA_OUTCOME_STOCK:
         return false;
@@ -95,7 +110,7 @@ bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_
         hintNote = 0;
         break;
     case UBA_OUTCOME_STOP_HINT:
-        hintNote = HINT_OFF;
+        hintNote = -1;
         break;
     case UBA_OUTCOME_IGNORE:
         break;

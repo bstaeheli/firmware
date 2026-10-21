@@ -16,5 +16,6 @@ void playLongPressLeadUp();
 bool playNextLeadUpNote();  // Play the next note in the lead-up sequence
 void resetLeadUpSequence(); // Reset the lead-up sequence to start from beginning
 #if MESHTASTIC_USER_BUTTON_ACTIONS
-bool playHintNote(int index); // Play one note of the user button hint tune, false when past the end
+bool playHintNote(int index);    // Play one note of the user button hint tune, false when past the end
+void playCountUpNote(int index); // Play one note of the user button shutdown count-up
 #endif

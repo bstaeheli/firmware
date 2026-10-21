@@ -103,9 +103,6 @@ class ButtonThread : public Observable<const InputEvent *>, public concurrency::
     uint16_t _longPressTime = 500;
     uint16_t _longLongPressTime = 3900;
     int _pinNum = 0;
-#if MESHTASTIC_USER_BUTTON_ACTIONS
-    uint32_t _leadUpMs = BUTTON_LEADUP_MS;
-#endif
     bool _activeLow = true;
     bool _touchQuirk = false;
 

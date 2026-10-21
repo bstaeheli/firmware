@@ -15,7 +15,7 @@ void setUp(void)
     cfg.single_press = BUTTON_ACTION_ACK_OR_ALERT;
     cfg.double_press = BUTTON_ACTION_DEFAULT;
     cfg.alert_min_interval_secs = 30;
-    cfg.hold_alert_max_ms = 5000;
+    cfg.hold_alert_max_ms = 3000;
     cfg.long_press_shutdown_ms = SHUTDOWN_MS;
     state = UserButtonState();
 }
@@ -44,7 +44,7 @@ static void test_build_flag_defaults_are_stock()
     TEST_ASSERT_EQUAL_STRING("\x07OK", c.ack_text);
     TEST_ASSERT_TRUE(c.alert_with_position);
     TEST_ASSERT_EQUAL_UINT32(30, c.alert_min_interval_secs);
-    TEST_ASSERT_EQUAL_UINT32(5000, c.hold_alert_max_ms);
+    TEST_ASSERT_EQUAL_UINT32(3000, c.hold_alert_max_ms);
     TEST_ASSERT_EQUAL_UINT32(0, c.long_press_shutdown_ms);
 }
 
@@ -166,14 +166,24 @@ static void test_zero_interval_never_limits()
 static void test_short_hold_acts_as_single_press()
 {
     TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_HOLD, 1000, 500));
-    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_HOLD, 2000, 4999));
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_HOLD, 2000, 2999));
     state.nagging = true;
-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_HOLD, 3000, 4999));
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_HOLD, 3000, 2999));
+}
+
+static void test_release_at_2900_ms_alerts()
+{
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_HOLD, 1000, 2900));
+}
+
+static void test_release_at_3100_ms_plays_hint()
+{
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_HINT, resolve(USER_BUTTON_HOLD, 1000, 3100));
 }
 
 static void test_medium_hold_plays_hint()
 {
-    TEST_ASSERT_EQUAL(UBA_OUTCOME_HINT, resolve(USER_BUTTON_HOLD, 1000, 5000));
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_HINT, resolve(USER_BUTTON_HOLD, 1000, 3000));
     state.nagging = true;
     TEST_ASSERT_EQUAL(UBA_OUTCOME_HINT, resolve(USER_BUTTON_HOLD, 2000, SHUTDOWN_MS - 1));
 }
@@ -188,6 +198,7 @@ static void test_hold_until_shutdown_keeps_stock()
 static void test_hold_with_stock_shutdown_time()
 {
     // stock shutdown (3900 ms) comes before hold_alert_max_ms: no hint, holds beyond it shut down
+    cfg.hold_alert_max_ms = 5000;
     state.nowMs = 1000;
     TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, userButtonActionsResolve(cfg, state, USER_BUTTON_HOLD, 3000, 3900));
     TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, userButtonActionsResolve(cfg, state, USER_BUTTON_HOLD, 4000, 3900));
@@ -207,21 +218,102 @@ static void test_hold_with_default_single_press_keeps_stock()
     TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 6000));
 }
 
-static void test_press_during_hint_only_stops_it()
+// A press starting while a melody plays only stops it; the rest of that press is consumed
+static void press_during_melody_is_consumed(UserButtonOutcome onDown, UserButtonGesture gesture, uint32_t holdMs)
 {
-    state.hintPlaying = true;
-    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOP_HINT, resolve(USER_BUTTON_SINGLE, 1000));
-    state.nagging = true;
-    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOP_HINT, resolve(USER_BUTTON_SINGLE, 1100));
+    TEST_ASSERT_EQUAL(onDown, resolve(USER_BUTTON_DOWN, 1000));
+    state.pressConsumed = true; // as the handler does after a stop/ack on button-down
     state.hintPlaying = false;
-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, 1200));
+    state.nagging = false;
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(gesture, 1500, holdMs));
 }
 
-static void test_lead_up_ends_at_shutdown_time()
+static void test_click_during_hint_only_stops_it()
 {
-    TEST_ASSERT_EQUAL_UINT32(2200, userButtonActionsLeadUpMs(0, 2200)); // no override: stock
-    TEST_ASSERT_EQUAL_UINT32(8700, userButtonActionsLeadUpMs(10000, 2200));
-    TEST_ASSERT_EQUAL_UINT32(2200, userButtonActionsLeadUpMs(1300, 2200)); // too short to shift
+    state.hintPlaying = true;
+    press_during_melody_is_consumed(UBA_OUTCOME_STOP_HINT, USER_BUTTON_SINGLE, 0);
+}
+
+static void test_double_during_hint_only_stops_it()
+{
+    state.hintPlaying = true;
+    press_during_melody_is_consumed(UBA_OUTCOME_STOP_HINT, USER_BUTTON_DOUBLE, 0);
+}
+
+static void test_hold_during_hint_does_not_shut_down()
+{
+    state.hintPlaying = true;
+    press_during_melody_is_consumed(UBA_OUTCOME_STOP_HINT, USER_BUTTON_HOLD, SHUTDOWN_MS + 5000);
+}
+
+static void test_press_during_nag_acks_on_button_down()
+{
+    state.nagging = true;
+    press_during_melody_is_consumed(UBA_OUTCOME_ACK, USER_BUTTON_DOUBLE, 0);
+}
+
+static void test_hold_during_nag_does_not_shut_down()
+{
+    state.nagging = true;
+    press_during_melody_is_consumed(UBA_OUTCOME_ACK, USER_BUTTON_HOLD, SHUTDOWN_MS + 5000);
+}
+
+static void test_hint_beats_nag_on_button_down()
+{
+    state.hintPlaying = true;
+    state.nagging = true;
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOP_HINT, resolve(USER_BUTTON_DOWN, 1000));
+}
+
+static void test_button_down_without_melody_does_nothing()
+{
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_DOWN, 1000));
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1200));
+}
+
+static void test_button_down_acks_only_with_ack_action()
+{
+    cfg.single_press = BUTTON_ACTION_SEND_ALERT;
+    state.nagging = true;
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_DOWN, 1000));
+    cfg.multi_press = BUTTON_ACTION_ACK_OR_ALERT2;
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_DOWN, 1000));
+}
+
+static void test_consumed_press_ends_with_its_gesture()
+{
+    state.pressConsumed = true;
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(USER_BUTTON_SINGLE, 1000));
+}
+
+static void test_hold_reaching_shutdown_keeps_stock_shutdown()
+{
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 10000));
+}
+
+static void test_lead_up_counts_up_to_shutdown()
+{
+    // 8 notes of 200 ms from 3 s; the last one starts at 9.8 s and ends at the 10 s shutdown time
+    TEST_ASSERT_EQUAL(-1, userButtonActionsLeadUpNote(2999, 3000, 10000));
+    TEST_ASSERT_EQUAL(0, userButtonActionsLeadUpNote(3000, 3000, 10000));
+    TEST_ASSERT_EQUAL(0, userButtonActionsLeadUpNote(3971, 3000, 10000));
+    TEST_ASSERT_EQUAL(1, userButtonActionsLeadUpNote(3972, 3000, 10000));
+    TEST_ASSERT_EQUAL(6, userButtonActionsLeadUpNote(9799, 3000, 10000));
+    TEST_ASSERT_EQUAL(7, userButtonActionsLeadUpNote(9800, 3000, 10000));
+    TEST_ASSERT_EQUAL(7, userButtonActionsLeadUpNote(60000, 3000, 10000));
+}
+
+static void test_lead_up_never_on_a_click()
+{
+    // hold_alert_max_ms = 0: start at the long press time, not at button-down
+    TEST_ASSERT_EQUAL(-1, userButtonActionsLeadUpNote(499, 0, 10000));
+    TEST_ASSERT_EQUAL(0, userButtonActionsLeadUpNote(500, 0, 10000));
+}
+
+static void test_lead_up_with_start_after_last_note()
+{
+    TEST_ASSERT_EQUAL(-1, userButtonActionsLeadUpNote(2000, 3000, 3100));
+    TEST_ASSERT_EQUAL(7, userButtonActionsLeadUpNote(2900, 3000, 3100));
 }
 
 void setup()
@@ -251,8 +343,21 @@ void setup()
     RUN_TEST(test_hold_with_stock_shutdown_time);
     RUN_TEST(test_hold_alert_disabled);
     RUN_TEST(test_hold_with_default_single_press_keeps_stock);
-    RUN_TEST(test_press_during_hint_only_stops_it);
-    RUN_TEST(test_lead_up_ends_at_shutdown_time);
+    RUN_TEST(test_release_at_2900_ms_alerts);
+    RUN_TEST(test_release_at_3100_ms_plays_hint);
+    RUN_TEST(test_click_during_hint_only_stops_it);
+    RUN_TEST(test_double_during_hint_only_stops_it);
+    RUN_TEST(test_hold_during_hint_does_not_shut_down);
+    RUN_TEST(test_press_during_nag_acks_on_button_down);
+    RUN_TEST(test_hold_during_nag_does_not_shut_down);
+    RUN_TEST(test_hint_beats_nag_on_button_down);
+    RUN_TEST(test_button_down_without_melody_does_nothing);
+    RUN_TEST(test_button_down_acks_only_with_ack_action);
+    RUN_TEST(test_consumed_press_ends_with_its_gesture);
+    RUN_TEST(test_hold_reaching_shutdown_keeps_stock_shutdown);
+    RUN_TEST(test_lead_up_counts_up_to_shutdown);
+    RUN_TEST(test_lead_up_never_on_a_click);
+    RUN_TEST(test_lead_up_with_start_after_last_note);
     exit(UNITY_END());
 }
 

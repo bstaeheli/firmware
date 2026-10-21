@@ -6,6 +6,10 @@
 #include "Tone.h"
 #endif
 
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+#include "input/UserButtonActions.h"
+#endif
+
 #if defined(HAS_I2S)
 #include "main.h"
 #include <unordered_map>
@@ -248,6 +252,17 @@ bool playHintNote(int index)
         return false;
     playTones(&hintNotes[index], 1);
     return true;
+}
+
+// Slowly rising scale towards the long-press shutdown
+void playCountUpNote(int index)
+{
+    static const int scale[] = {NOTE_C3, NOTE_D3, NOTE_E3, NOTE_F3, NOTE_G3, NOTE_A3, NOTE_B3, NOTE_C4};
+    static_assert(sizeof(scale) / sizeof(scale[0]) == UBA_LEADUP_NOTES, "one note per count-up step");
+    if (index < 0 || index >= UBA_LEADUP_NOTES)
+        return;
+    const ToneDuration note = {scale[index], UBA_LEADUP_NOTE_MS};
+    playTones(&note, 1);
 }
 #endif
 

@@ -54,7 +54,7 @@ bool ButtonThread::initButton(const ButtonConfig &config)
     if (userButtonActionsApply(_originName) && _longLongPress == INPUT_BROKER_SHUTDOWN &&
         userButtonActionsConfig().long_press_shutdown_ms) {
         _longLongPressTime = userButtonActionsConfig().long_press_shutdown_ms;
-        _leadUpMs = userButtonActionsLeadUpMs(_longLongPressTime, BUTTON_LEADUP_MS);
+        _suppressLeadUp = true; // replaced by the count-up melody of userButtonActionsTick()
     }
 #endif
 
@@ -149,10 +149,6 @@ int32_t ButtonThread::runOnce()
     // Check if we should play lead-up sound during long press
     // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long press triggers
     bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
-#if MESHTASTIC_USER_BUTTON_ACTIONS
-    if (userButtonActionsApply(_originName))
-        userButtonActionsTick(buttonCurrentlyPressed);
-#endif
 
     // Detect start of button press
     if (buttonCurrentlyPressed && !buttonWasPressed) {
@@ -162,6 +158,11 @@ int32_t ButtonThread::runOnce()
         leadUpPlayed = false;
         leadUpSequenceActive = false;
         resetLeadUpSequence();
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+        // A press while a melody plays only stops it (and acks a notification), right away
+        if (userButtonActionsApply(_originName))
+            userButtonActionsHandle(USER_BUTTON_DOWN);
+#endif
     }
 #ifdef INPUT_DEBUG
     if (buttonCurrentlyPressed)
@@ -169,12 +170,12 @@ int32_t ButtonThread::runOnce()
 #endif
 
 #if MESHTASTIC_USER_BUTTON_ACTIONS
-    const uint32_t leadUpMs = _leadUpMs;
-#else
-    const uint32_t leadUpMs = BUTTON_LEADUP_MS;
+    if (userButtonActionsApply(_originName) && userButtonActionsTick(buttonCurrentlyPressed, millis() - buttonPressStartTime))
+        leadUpPlayed = true;
 #endif
+
     // Progressive lead-up sound system
-    if (!_suppressLeadUp && buttonCurrentlyPressed && (millis() - buttonPressStartTime) >= leadUpMs) {
+    if (!_suppressLeadUp && buttonCurrentlyPressed && (millis() - buttonPressStartTime) >= BUTTON_LEADUP_MS) {
 
         // Start the progressive sequence if not already active
         if (!leadUpSequenceActive) {
@@ -323,8 +324,12 @@ int32_t ButtonThread::runOnce()
             LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
 #if MESHTASTIC_USER_BUTTON_ACTIONS
             // Shorter holds alert or play the hint; holds reaching the shutdown time fall through to stock shutdown
-            if (userButtonActionsApply(_originName))
-                userButtonActionsHandle(USER_BUTTON_HOLD, millis() - buttonPressStartTime, _longLongPressTime);
+            if (userButtonActionsApply(_originName) &&
+                userButtonActionsHandle(USER_BUTTON_HOLD, millis() - buttonPressStartTime, _longLongPressTime)) {
+                waitingForLongPress = false;
+                leadUpPlayed = false;
+                break;
+            }
 #endif
             // Require press started after boot holdoff to avoid phantom shutdown from floating pins
             if (millis() > 30000 && buttonPressStartTime > 30000 && _longLongPress != INPUT_BROKER_NONE &&

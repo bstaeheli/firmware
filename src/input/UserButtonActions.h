@@ -21,6 +21,7 @@ enum UserButtonGesture : uint8_t {
     USER_BUTTON_DOUBLE,
     USER_BUTTON_MULTI, // three or more presses
     USER_BUTTON_HOLD,  // released after a long press
+    USER_BUTTON_DOWN,  // button went down (start of any gesture)
 };
 
 // Fields mirror the proposed UserButtonConfig protobuf message.
@@ -48,13 +49,19 @@ struct UserButtonActionsConfig {
 #define UBA_MULTI_PRESS BUTTON_ACTION_DEFAULT
 #endif
 #ifndef UBA_ALERT_TEXT
-#define UBA_ALERT_TEXT "\x07HELP"
+#define UBA_ALERT_TEXT                                                                                                           \
+    "\x07"                                                                                                                       \
+    "HELP"
 #endif
 #ifndef UBA_ALERT2_TEXT
-#define UBA_ALERT2_TEXT "\x07SOS"
+#define UBA_ALERT2_TEXT                                                                                                          \
+    "\x07"                                                                                                                       \
+    "SOS"
 #endif
 #ifndef UBA_ACK_TEXT
-#define UBA_ACK_TEXT "\x07OK"
+#define UBA_ACK_TEXT                                                                                                             \
+    "\x07"                                                                                                                       \
+    "OK"
 #endif
 #ifndef UBA_ALERT_WITH_POSITION
 #define UBA_ALERT_WITH_POSITION 1
@@ -63,7 +70,7 @@ struct UserButtonActionsConfig {
 #define UBA_ALERT_MIN_INTERVAL_SECS 30
 #endif
 #ifndef UBA_HOLD_ALERT_MAX_MS
-#define UBA_HOLD_ALERT_MAX_MS 5000
+#define UBA_HOLD_ALERT_MAX_MS 3000
 #endif
 #ifndef UBA_LONG_PRESS_SHUTDOWN_MS
 #define UBA_LONG_PRESS_SHUTDOWN_MS 0
@@ -116,8 +123,9 @@ struct UserButtonRateLimiter {
 };
 
 struct UserButtonState {
-    bool nagging = false;     // external notification running
-    bool hintPlaying = false; // hint tune running
+    bool nagging = false;       // external notification running
+    bool hintPlaying = false;   // hint tune running
+    bool pressConsumed = false; // this press stopped a melody, ignore its gesture
     uint32_t nowMs = 0;
     UserButtonRateLimiter limiters[2]; // per alert level
 };
@@ -128,6 +136,17 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig 
 {
     if (!config.enabled)
         return UBA_OUTCOME_STOCK;
+    // While a melody plays, the button only stops it (nag: with ack) right at button-down; the handler then sets
+    // pressConsumed so the gesture of that press does nothing else (no alert, hint or shutdown)
+    if (gesture == USER_BUTTON_DOWN) {
+        if (state.hintPlaying)
+            return UBA_OUTCOME_STOP_HINT;
+        auto acks = [](UserButtonAction a) { return a == BUTTON_ACTION_ACK_OR_ALERT || a == BUTTON_ACTION_ACK_OR_ALERT2; };
+        const bool ackConfigured = acks(config.single_press) || acks(config.double_press) || acks(config.multi_press);
+        return state.nagging && ackConfigured ? UBA_OUTCOME_ACK : UBA_OUTCOME_STOCK;
+    }
+    if (state.pressConsumed)
+        return UBA_OUTCOME_IGNORE;
     if (state.hintPlaying)
         return UBA_OUTCOME_STOP_HINT;
 
@@ -174,16 +193,26 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig 
     }
 }
 
-// When the long-press shutdown time is overridden, start the stock lead-up melody (4 notes, 400 ms apart) so that it
-// ends at the shutdown time: the melody means "release now and the device turns off".
-inline uint32_t userButtonActionsLeadUpMs(uint32_t shutdownMs, uint32_t stockLeadUpMs)
+// Count-up melody that replaces the stock lead-up when long_press_shutdown_ms is set: rising notes from
+// hold_alert_max_ms (at the earliest from the long press time), the last one ending at the shutdown time.
+static const int UBA_LEADUP_NOTES = 8;
+static const uint32_t UBA_LEADUP_NOTE_MS = 200;
+
+// Index of the count-up note due after holding for holdMs, -1 = none yet
+inline int userButtonActionsLeadUpNote(uint32_t holdMs, uint32_t holdAlertMaxMs, uint32_t shutdownMs)
 {
-    const uint32_t leadUpDurationMs = 1300;
-    return shutdownMs > leadUpDurationMs ? shutdownMs - leadUpDurationMs : stockLeadUpMs;
+    const uint32_t startMs = holdAlertMaxMs > 500 ? holdAlertMaxMs : 500; // never on a click
+    const uint32_t lastNoteMs = shutdownMs > UBA_LEADUP_NOTE_MS ? shutdownMs - UBA_LEADUP_NOTE_MS : 0;
+    if (holdMs >= lastNoteMs)
+        return UBA_LEADUP_NOTES - 1;
+    if (holdMs < startMs)
+        return -1;
+    return (holdMs - startMs) * (UBA_LEADUP_NOTES - 1) / (lastNoteMs - startMs);
 }
 
 // Runs the configured action. Returns true if the gesture was handled and stock handling must be skipped.
 bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs = 0, uint32_t shutdownMs = 0);
 
-// Plays the hint tune one note per call; call regularly from the button thread. A press stops the tune.
-void userButtonActionsTick(bool buttonPressed);
+// Plays the hint tune and the count-up lead-up melody one note per call; call regularly from the button thread.
+// Returns true once the lead-up melody has finished.
+bool userButtonActionsTick(bool buttonPressed, uint32_t holdMs);
