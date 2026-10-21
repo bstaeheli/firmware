@@ -126,9 +126,20 @@ struct UserButtonState {
     bool nagging = false;       // external notification running
     bool hintPlaying = false;   // hint tune running
     bool pressConsumed = false; // this press stopped a melody, ignore its gesture
+    uint32_t lastPressedMs = 0; // last time the button was seen pressed
     uint32_t nowMs = 0;
     UserButtonRateLimiter limiters[2]; // per alert level
 };
+
+// OneButton reports a gesture 250 ms (BUTTON_CLICK_MS) after the last release; margin included
+static const uint32_t UBA_GESTURE_TIMEOUT_MS = 1000;
+
+// Call at button-down: a consumed press whose gesture never arrived must not swallow a later press
+inline void userButtonActionsPressStart(UserButtonState &state)
+{
+    if (state.pressConsumed && state.nowMs - state.lastPressedMs > UBA_GESTURE_TIMEOUT_MS)
+        state.pressConsumed = false;
+}
 
 // holdMs: how long a USER_BUTTON_HOLD lasted; shutdownMs: effective long-press shutdown time
 inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig &config, const UserButtonState &state,

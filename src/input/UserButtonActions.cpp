@@ -49,6 +49,9 @@ bool userButtonActionsTick(bool buttonPressed, uint32_t holdMs)
     if (hintNote >= 0 && !playHintNote(hintNote++))
         hintNote = -1;
 
+    if (buttonPressed)
+        state.lastPressedMs = millis();
+
     const UserButtonActionsConfig &cfg = userButtonActionsConfig();
     if (!buttonPressed || state.pressConsumed || !cfg.long_press_shutdown_ms)
         return false;
@@ -68,6 +71,8 @@ bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_
         externalNotificationModule && moduleConfig.external_notification.enabled && externalNotificationModule->nagging();
     state.hintPlaying = hintNote >= 0;
     state.nowMs = millis();
+    if (gesture == USER_BUTTON_DOWN)
+        userButtonActionsPressStart(state);
 
     UserButtonOutcome outcome = userButtonActionsResolve(cfg, state, gesture, holdMs, shutdownMs);
     if (gesture == USER_BUTTON_DOWN) {

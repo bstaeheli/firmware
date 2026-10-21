@@ -286,6 +286,20 @@ static void test_consumed_press_ends_with_its_gesture()
     TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(USER_BUTTON_SINGLE, 1000));
 }
 
+static void test_consumed_press_without_gesture_does_not_swallow_next_click()
+{
+    // a press stopped a melody, but no gesture was ever reported for it; last seen pressed at 1000 ms
+    state.pressConsumed = true;
+    state.lastPressedMs = 1000;
+    state.nowMs = 1500; // next button-down within the click series: still the same press
+    userButtonActionsPressStart(state);
+    TEST_ASSERT_TRUE(state.pressConsumed);
+    state.nowMs = 2100; // next button-down later: a new press
+    userButtonActionsPressStart(state);
+    TEST_ASSERT_FALSE(state.pressConsumed);
+    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 2400));
+}
+
 static void test_hold_reaching_shutdown_keeps_stock_shutdown()
 {
     TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 10000));
@@ -354,6 +368,7 @@ void setup()
     RUN_TEST(test_button_down_without_melody_does_nothing);
     RUN_TEST(test_button_down_acks_only_with_ack_action);
     RUN_TEST(test_consumed_press_ends_with_its_gesture);
+    RUN_TEST(test_consumed_press_without_gesture_does_not_swallow_next_click);
     RUN_TEST(test_hold_reaching_shutdown_keeps_stock_shutdown);
     RUN_TEST(test_lead_up_counts_up_to_shutdown);
     RUN_TEST(test_lead_up_never_on_a_click);
