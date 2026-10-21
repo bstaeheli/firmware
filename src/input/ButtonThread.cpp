@@ -17,6 +17,9 @@
 #ifdef ARCH_PORTDUINO
 #include "platform/portduino/PortduinoGlue.h"
 #endif
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+#include "input/UserButtonActions.h"
+#endif
 
 using namespace concurrency;
 
@@ -41,6 +44,10 @@ bool ButtonThread::initButton(const ButtonConfig &config)
     _releaseHandler = config.onRelease;
     _suppressLeadUp = config.suppressLeadUpSound;
     _longLongPress = config.longLongPress;
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+    if (_longLongPress == INPUT_BROKER_SHUTDOWN && userButtonActionsConfig().long_press_shutdown_ms)
+        _longLongPressTime = userButtonActionsConfig().long_press_shutdown_ms;
+#endif
 
     userButton = OneButton(config.pinNumber, config.activeLow, config.activePullup);
 
@@ -186,6 +193,10 @@ int32_t ButtonThread::runOnce()
         evt.touchY = 0;
         switch (btnEvent) {
         case BUTTON_EVENT_PRESSED: {
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+            if (strcmp(_originName, "UserButton") == 0 && userButtonActionsHandle(USER_BUTTON_SINGLE))
+                break;
+#endif
             // Forward single press to InputBroker (but NOT as DOWN/SELECT, just forward a "button press" event)
             evt.inputEvent = _singlePress;
             // evt.kbchar = _singlePress; // todo: fix this. Some events are kb characters rather than event types
@@ -227,6 +238,12 @@ int32_t ButtonThread::runOnce()
 
         case BUTTON_EVENT_DOUBLE_PRESSED: { // not wired in if screen detected
             LOG_INFO("Double press!");
+#if MESHTASTIC_USER_BUTTON_ACTIONS
+            if (strcmp(_originName, "UserButton") == 0 && userButtonActionsHandle(USER_BUTTON_DOUBLE)) {
+                waitingForLongPress = false;
+                break;
+            }
+#endif
 
             // Reset combination tracking
             waitingForLongPress = false;
