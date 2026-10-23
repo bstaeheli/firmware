@@ -550,6 +550,48 @@ static void test_alert_link_dropped_when_too_long()
     TEST_ASSERT_EQUAL_STRING("\aHELP", small);
 }
 
+static void test_alert_position_of_fresh_fix()
+{
+    meshtastic_Position out;
+    meshtastic_Position f = fix();
+    f.altitude = 420;
+    TEST_ASSERT_TRUE(userButtonActionsAlertPosition(out, f, 32, 0, 1000000 + 60));
+    TEST_ASSERT_EQUAL(473769000, out.latitude_i);
+    TEST_ASSERT_EQUAL(85417000, out.longitude_i);
+    TEST_ASSERT_TRUE(out.has_latitude_i && out.has_longitude_i);
+    TEST_ASSERT_EQUAL(1000000 + 60, out.time); // fresh: sent as now, like PositionModule
+    TEST_ASSERT_EQUAL(1000000, out.timestamp);
+    TEST_ASSERT_EQUAL(32, out.precision_bits);
+    TEST_ASSERT_FALSE(out.has_altitude); // only with position_flags
+    TEST_ASSERT_TRUE(userButtonActionsAlertPosition(out, f, 32,
+                                                    meshtastic_Config_PositionConfig_PositionFlags_ALTITUDE |
+                                                        meshtastic_Config_PositionConfig_PositionFlags_ALTITUDE_MSL,
+                                                    1000000));
+    TEST_ASSERT_TRUE(out.has_altitude);
+    TEST_ASSERT_EQUAL(420, out.altitude);
+}
+
+static void test_alert_position_of_old_fix_keeps_fix_time()
+{
+    meshtastic_Position out;
+    TEST_ASSERT_TRUE(userButtonActionsAlertPosition(out, fix(), 32, 0, 1000000 + 30 * 60));
+    TEST_ASSERT_EQUAL(1000000, out.time);
+    TEST_ASSERT_EQUAL(1000000, out.timestamp);
+}
+
+static void test_alert_position_respects_channel_precision()
+{
+    meshtastic_Position out;
+    meshtastic_Position expected = fix();
+    applyPositionPrecision(expected, 16);
+    TEST_ASSERT_TRUE(userButtonActionsAlertPosition(out, fix(), 16, 0, 1000000));
+    TEST_ASSERT_EQUAL(expected.latitude_i, out.latitude_i);
+    TEST_ASSERT_EQUAL(expected.longitude_i, out.longitude_i);
+    TEST_ASSERT_EQUAL(16, out.precision_bits);
+    TEST_ASSERT_FALSE(userButtonActionsAlertPosition(out, fix(), 0, 0, 1000000));
+    TEST_ASSERT_FALSE(userButtonActionsAlertPosition(out, meshtastic_Position_init_default, 32, 0, 1000000)); // no fix
+}
+
 void setup()
 {
     initializeTestEnvironment();
@@ -610,6 +652,9 @@ void setup()
     RUN_TEST(test_last_fix_forgotten_without_fix_since_boot);
     RUN_TEST(test_alert_link_respects_channel_precision);
     RUN_TEST(test_alert_link_dropped_when_too_long);
+    RUN_TEST(test_alert_position_of_fresh_fix);
+    RUN_TEST(test_alert_position_of_old_fix_keeps_fix_time);
+    RUN_TEST(test_alert_position_respects_channel_precision);
     exit(UNITY_END());
 }
 

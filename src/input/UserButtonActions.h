@@ -280,6 +280,53 @@ inline void userButtonActionsRememberFix(meshtastic_Position &lastFix, const mes
         lastFix = current;
 }
 
+// A fix older than this is reported with its age and sent with its own time
+static const uint32_t UBA_OLD_FIX_SECS = 120;
+
+// Fix age in seconds, 0 = fresh or unknown (no valid time)
+inline uint32_t userButtonActionsFixAge(const meshtastic_Position &fix, uint32_t nowSecs)
+{
+    const uint32_t fixSecs = fix.timestamp ? fix.timestamp : fix.time;
+    return nowSecs && fixSecs && nowSecs > fixSecs ? nowSecs - fixSecs : 0;
+}
+
+// Position packet payload for an alert, as PositionModule::allocPositionPacket would build it (position_flags subset,
+// channel precision), but an old fix keeps its own time instead of looking fresh. Returns false if nothing may be sent.
+inline bool userButtonActionsAlertPosition(meshtastic_Position &out, const meshtastic_Position &fix, uint32_t precision,
+                                           uint32_t posFlags, uint32_t nowSecs)
+{
+    out = meshtastic_Position_init_default;
+    if (!precision || (!fix.latitude_i && !fix.longitude_i))
+        return false;
+    out.latitude_i = fix.latitude_i;
+    out.longitude_i = fix.longitude_i;
+    out.has_latitude_i = out.has_longitude_i = true;
+    out.location_source = fix.location_source;
+    out.timestamp = fix.timestamp ? fix.timestamp : fix.time;
+    out.time = userButtonActionsFixAge(fix, nowSecs) > UBA_OLD_FIX_SECS ? out.timestamp : nowSecs;
+    if (posFlags & meshtastic_Config_PositionConfig_PositionFlags_ALTITUDE) {
+        if (posFlags & meshtastic_Config_PositionConfig_PositionFlags_ALTITUDE_MSL) {
+            out.altitude = fix.altitude;
+            out.has_altitude = true;
+        } else {
+            out.altitude_hae = fix.altitude_hae;
+            out.has_altitude_hae = true;
+        }
+    }
+    if (posFlags & meshtastic_Config_PositionConfig_PositionFlags_DOP) {
+        if (posFlags & meshtastic_Config_PositionConfig_PositionFlags_HVDOP) {
+            out.HDOP = fix.HDOP;
+            out.VDOP = fix.VDOP;
+        } else {
+            out.PDOP = fix.PDOP;
+        }
+    }
+    if (posFlags & meshtastic_Config_PositionConfig_PositionFlags_SATINVIEW)
+        out.sats_in_view = fix.sats_in_view;
+    applyPositionPrecision(out, precision);
+    return true;
+}
+
 // Alert text plus a map link to the position as the position packet would reveal it, e.g.
 // "\aHELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old", or "\aHELP no GPS fix" without a position.
 // precision: channel position_precision, 0 = plain text. nowSecs: valid time, 0 = unknown.
@@ -317,9 +364,8 @@ inline size_t userButtonActionsAlertText(char *buf, size_t size, const char *ale
     int n = snprintf(link, sizeof(link), " https://osm.org/go/%s?m", code);
     if (accuracyM)
         n += snprintf(link + n, sizeof(link) - n, " \xC2\xB1%um", (unsigned)accuracyM);
-    const uint32_t fixSecs = pos.timestamp ? pos.timestamp : pos.time;
-    const uint32_t ageSecs = nowSecs && fixSecs && nowSecs > fixSecs ? nowSecs - fixSecs : 0;
-    if (ageSecs > 120) {
+    const uint32_t ageSecs = userButtonActionsFixAge(pos, nowSecs);
+    if (ageSecs > UBA_OLD_FIX_SECS) {
         const uint32_t mins = ageSecs / 60;
         if (mins < 60)
             snprintf(link + n, sizeof(link) - n, " %umin old", (unsigned)mins);

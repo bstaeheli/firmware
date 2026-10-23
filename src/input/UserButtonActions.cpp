@@ -11,9 +11,6 @@
 #include "buzz/buzz.h"
 #include "gps/RTC.h"
 #include "modules/ExternalNotificationModule.h"
-#if !MESHTASTIC_EXCLUDE_GPS
-#include "modules/PositionModule.h"
-#endif
 
 // Same packet construction as CannedMessageModule::sendText, but broadcast on the primary channel without ack
 static void sendTextBroadcast(const char *text)
@@ -50,20 +47,23 @@ static void rememberFix()
     userButtonActionsRememberFix(lastFix, current, config.position.fixed_position || nodeDB->hasLocalPositionSinceBoot());
 }
 
-// Position packet with the last fix, also after the GPS lost lock (stock would send none). PositionModule builds it
-// from localPosition with the channel precision, so swap the last fix in for this one packet.
+// Position packet with the last fix, also after the GPS lost lock (stock would send none). Sent like the alert text
+// (HIGH priority) and not via PositionModule, whose next periodic send would cancel it.
 static void sendLastFix()
 {
-#if !MESHTASTIC_EXCLUDE_GPS
-    if (!positionModule || (!lastFix.latitude_i && !lastFix.longitude_i))
+    meshtastic_Position pos;
+    if (!userButtonActionsAlertPosition(pos, lastFix, getPositionPrecisionForChannel(0), config.position.position_flags,
+                                        getValidTime(RTCQualityDevice)))
         return;
-    meshtastic_Position current = localPosition;
-    localPosition = lastFix;
-    service->refreshLocalMeshNode();
-    positionModule->sendOurPosition(NODENUM_BROADCAST, false, 0);
-    current.seq_number = localPosition.seq_number;
-    localPosition = current;
-#endif
+    meshtastic_MeshPacket *p = router->allocForSending();
+    p->to = NODENUM_BROADCAST;
+    p->channel = 0;
+    p->want_ack = false;
+    p->priority = meshtastic_MeshPacket_Priority_HIGH;
+    p->decoded.portnum = meshtastic_PortNum_POSITION_APP;
+    p->decoded.payload.size =
+        pb_encode_to_bytes(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes), &meshtastic_Position_msg, &pos);
+    service->sendToMesh(p, RX_SRC_LOCAL, true);
 }
 
 // Button feedback as stock would give it for this event (honors buzzer_mode)
