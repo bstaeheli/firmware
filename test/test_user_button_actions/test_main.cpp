@@ -381,6 +381,132 @@ static void test_lead_up_with_start_after_last_note()
     TEST_ASSERT_EQUAL(7, userButtonActionsLeadUpNote(2900, 3000, 3100));
 }
 
+static void test_osm_short_link_matches_upstream()
+{
+    // Vectors from openstreetmap-website lib/short_link.rb
+    struct {
+        int32_t lat, lon;
+        uint8_t zoom;
+        const char *code;
+    } vectors[] = {
+        {473769000, 85417000, 18, "0C0WCb6VB--"},  {473769000, 85417000, 12, "0C0WCb6--"},
+        {-338688000, 1512093000, 16, "uN~ROOdV"},  {407128000, -740060000, 17, "Zct2v4Otf-"},
+        {-548019000, -683030000, 14, "Ja4o96dS-"}, {0, 0, 15, "wAAAAAAA--"},
+        {515074000, -1278000, 13, "euu4gZq"},
+    };
+    for (auto &v : vectors) {
+        char code[UBA_OSM_CODE_SIZE];
+        osmShortLink(code, v.lat, v.lon, v.zoom);
+        TEST_ASSERT_EQUAL_STRING(v.code, code);
+    }
+}
+
+static void test_map_zoom_from_accuracy()
+{
+    TEST_ASSERT_EQUAL(18, userButtonActionsMapZoom(5));
+    TEST_ASSERT_EQUAL(18, userButtonActionsMapZoom(30));
+    TEST_ASSERT_EQUAL(17, userButtonActionsMapZoom(50));
+    TEST_ASSERT_EQUAL(14, userButtonActionsMapZoom(365));
+    TEST_ASSERT_EQUAL(12, userButtonActionsMapZoom(2920));
+    TEST_ASSERT_EQUAL(12, userButtonActionsMapZoom(100000));
+    TEST_ASSERT_EQUAL(16, userButtonActionsMapZoom(0)); // unknown accuracy
+}
+
+static meshtastic_Position fix(uint32_t hdop = 500, uint32_t timestamp = 1000000)
+{
+    meshtastic_Position p = meshtastic_Position_init_default;
+    p.latitude_i = 473769000;
+    p.longitude_i = 85417000;
+    p.HDOP = hdop;
+    p.timestamp = timestamp;
+    return p;
+}
+
+static const char *alertText(const meshtastic_Position &pos, uint32_t precision, uint32_t nowSecs = 1000000,
+                             const char *alert = "\aHELP")
+{
+    static char buf[meshtastic_Constants_DATA_PAYLOAD_LEN + 1];
+    userButtonActionsAlertText(buf, sizeof(buf), alert, pos, precision, nowSecs);
+    return buf;
+}
+
+static void test_alert_with_map_link()
+{
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
+                             "25m",
+                             alertText(fix(), 32));
+}
+
+static void test_alert_accuracy_from_hdop_or_pdop()
+{
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
+                             "5m",
+                             alertText(fix(80), 32)); // 4 m, at least 5
+    meshtastic_Position p = fix(0);
+    p.PDOP = 1200;
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB-?m \xC2\xB1"
+                             "60m",
+                             alertText(p, 32));
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6V?m", alertText(fix(0), 32)); // unknown: no accuracy
+}
+
+static void test_alert_link_shows_age_of_old_fix()
+{
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
+                             "25m",
+                             alertText(fix(), 32, 1000000 + 120));
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
+                             "25m 4min old",
+                             alertText(fix(), 32, 1000000 + 270));
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
+                             "25m 2h old",
+                             alertText(fix(), 32, 1000000 + 2 * 3600 + 5));
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
+                             "25m 3d old",
+                             alertText(fix(), 32, 1000000 + 3 * 86400));
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
+                             "25m",
+                             alertText(fix(), 32, 0)); // no valid time
+    meshtastic_Position p = fix(500, 0);
+    p.time = 1000000 - 600; // no fix timestamp: use the position time
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
+                             "25m 10min old",
+                             alertText(p, 32));
+}
+
+static void test_alert_without_position_sharing_is_plain()
+{
+    TEST_ASSERT_EQUAL_STRING("\aHELP", alertText(fix(), 0));
+    meshtastic_Position p = fix();
+    p.latitude_i = p.longitude_i = 0;
+    TEST_ASSERT_EQUAL_STRING("\aHELP", alertText(p, 32)); // no fix
+}
+
+static void test_alert_link_respects_channel_precision()
+{
+    // Truncated and centered like PositionModule; accuracy at least the precision radius
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WDhgM-?m \xC2\xB1"
+                             "365m",
+                             alertText(fix(), 16));
+    TEST_ASSERT_EQUAL_STRING("\aSOS https://osm.org/go/0C0R~O5--?m \xC2\xB1"
+                             "2920m",
+                             alertText(fix(), 13, 1000000, "\aSOS"));
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WDhgM-?m \xC2\xB1"
+                             "365m",
+                             alertText(fix(0), 16)); // radius shown even without DOP
+}
+
+static void test_alert_link_dropped_when_too_long()
+{
+    char alert[meshtastic_Constants_DATA_PAYLOAD_LEN - 20];
+    memset(alert, 'x', sizeof(alert) - 1);
+    alert[sizeof(alert) - 1] = 0;
+    TEST_ASSERT_EQUAL_STRING(alert, alertText(fix(), 32, 1000000, alert));
+    char small[16];
+    TEST_ASSERT_EQUAL(5, userButtonActionsAlertText(small, sizeof(small), "\aHELP", fix(), 32, 1000000));
+    TEST_ASSERT_EQUAL_STRING("\aHELP", small);
+}
+
 void setup()
 {
     initializeTestEnvironment();
@@ -430,6 +556,14 @@ void setup()
     RUN_TEST(test_lead_up_counts_up_to_shutdown);
     RUN_TEST(test_lead_up_never_on_a_click);
     RUN_TEST(test_lead_up_with_start_after_last_note);
+    RUN_TEST(test_osm_short_link_matches_upstream);
+    RUN_TEST(test_map_zoom_from_accuracy);
+    RUN_TEST(test_alert_with_map_link);
+    RUN_TEST(test_alert_accuracy_from_hdop_or_pdop);
+    RUN_TEST(test_alert_link_shows_age_of_old_fix);
+    RUN_TEST(test_alert_without_position_sharing_is_plain);
+    RUN_TEST(test_alert_link_respects_channel_precision);
+    RUN_TEST(test_alert_link_dropped_when_too_long);
     exit(UNITY_END());
 }
 

@@ -1,6 +1,9 @@
 #pragma once
 
+#include "PositionPrecision.h"
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 // Configurable actions for the user button, mainly for devices without a screen.
 // Compiled in only with MESHTASTIC_USER_BUTTON_ACTIONS; the decision logic below is
@@ -234,6 +237,79 @@ inline int userButtonActionsLeadUpNote(uint32_t holdMs, uint32_t holdAlertMaxMs,
     if (holdMs < startMs)
         return -1;
     return (holdMs - startMs) * (UBA_LEADUP_NOTES - 1) / (lastNoteMs - startMs);
+}
+
+// OSM shortlink code (openstreetmap-website lib/short_link.rb); code needs UBA_OSM_CODE_SIZE bytes for zoom <= 18
+static const size_t UBA_OSM_CODE_SIZE = 12;
+inline void osmShortLink(char *code, int32_t lat_i, int32_t lon_i, uint8_t zoom)
+{
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_~";
+    const uint32_t x = (uint64_t)((int64_t)lon_i + 1800000000) * (1ull << 32) / 3600000000u;
+    const uint32_t y = (uint64_t)((int64_t)lat_i + 900000000) * (1ull << 32) / 1800000000u;
+    uint64_t bits = 0;
+    for (int i = 31; i >= 0; i--)
+        bits = (bits << 2) | ((x >> i) & 1) << 1 | ((y >> i) & 1);
+    int n = 0;
+    for (int i = 0; i < (zoom + 8 + 2) / 3; i++)
+        code[n++] = alphabet[(bits >> (58 - 6 * i)) & 0x3f];
+    for (int i = 0; i < (zoom + 8) % 3; i++)
+        code[n++] = '-';
+    code[n] = 0;
+}
+
+// Zoom at which the map shows a few times the accuracy radius (meters, 0 = unknown)
+inline uint8_t userButtonActionsMapZoom(uint32_t accuracyM)
+{
+    if (!accuracyM)
+        return 16;
+    uint8_t zoom = 18; // a phone screen spans roughly 2^(26 - zoom) m
+    while (zoom > 12 && (1u << (23 - zoom)) < accuracyM)
+        zoom--;
+    return zoom;
+}
+
+// Alert text plus a map link to the position as the position packet would reveal it, e.g.
+// "\aHELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old". precision: channel position_precision, 0 = no link.
+// nowSecs: valid time, 0 = unknown. The link is left out if it does not fit. Returns the text length.
+inline size_t userButtonActionsAlertText(char *buf, size_t size, const char *alert, meshtastic_Position pos, uint32_t precision,
+                                         uint32_t nowSecs)
+{
+    int len = snprintf(buf, size, "%s", alert);
+    if (len < 0 || (size_t)len >= size || !precision || (!pos.latitude_i && !pos.longitude_i))
+        return len < 0 ? 0 : strlen(buf);
+
+    // Accuracy ~ 5 m per DOP (1/100 units) rounded to 5 m, at least the radius of the precision cell
+    const uint32_t dop = pos.HDOP ? pos.HDOP : pos.PDOP;
+    uint32_t accuracyM = dop ? (dop + 50) / 100 * 5 : 0;
+    if (dop && !accuracyM)
+        accuracyM = 5;
+    applyPositionPrecision(pos, precision);
+    if (pos.precision_bits < 32) {
+        const uint32_t radiusM = (uint32_t)(((1ull << (31 - pos.precision_bits)) * 11132 + 999999) / 1000000);
+        if (accuracyM < radiusM)
+            accuracyM = (radiusM + 4) / 5 * 5;
+    }
+
+    char code[UBA_OSM_CODE_SIZE];
+    osmShortLink(code, pos.latitude_i, pos.longitude_i, userButtonActionsMapZoom(accuracyM));
+    char link[64];
+    int n = snprintf(link, sizeof(link), " https://osm.org/go/%s?m", code);
+    if (accuracyM)
+        n += snprintf(link + n, sizeof(link) - n, " \xC2\xB1%um", (unsigned)accuracyM);
+    const uint32_t fixSecs = pos.timestamp ? pos.timestamp : pos.time;
+    const uint32_t ageSecs = nowSecs && fixSecs && nowSecs > fixSecs ? nowSecs - fixSecs : 0;
+    if (ageSecs > 120) {
+        const uint32_t mins = ageSecs / 60;
+        if (mins < 60)
+            snprintf(link + n, sizeof(link) - n, " %umin old", (unsigned)mins);
+        else if (mins < 48 * 60)
+            snprintf(link + n, sizeof(link) - n, " %uh old", (unsigned)(mins / 60));
+        else
+            snprintf(link + n, sizeof(link) - n, " %ud old", (unsigned)(mins / 1440));
+    }
+    if ((size_t)len + strlen(link) < size)
+        strcpy(buf + len, link);
+    return strlen(buf);
 }
 
 // Runs the configured action. Returns true if the gesture was handled and stock handling must be skipped.

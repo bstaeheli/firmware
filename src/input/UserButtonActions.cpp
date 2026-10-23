@@ -8,6 +8,7 @@
 #include "UserButtonActions.h"
 #include "buzz/BuzzerFeedbackThread.h"
 #include "buzz/buzz.h"
+#include "gps/RTC.h"
 #include "modules/ExternalNotificationModule.h"
 
 // Same packet construction as CannedMessageModule::sendText, but broadcast on the primary channel without ack
@@ -96,14 +97,21 @@ bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_
         playFeedback(INPUT_BROKER_USER_PRESS);
         break;
     case UBA_OUTCOME_ALERT:
-    case UBA_OUTCOME_ALERT2:
+    case UBA_OUTCOME_ALERT2: {
         LOG_INFO("User button: send alert level %d", outcome == UBA_OUTCOME_ALERT2 ? 2 : 1);
-        sendTextBroadcast(outcome == UBA_OUTCOME_ALERT2 ? cfg.alert2_text : cfg.alert_text);
+        // Map link only to what the position packet on the primary channel reveals
+        char text[meshtastic_Constants_DATA_PAYLOAD_LEN + 1];
+        const uint32_t precision =
+            cfg.alert_with_position && nodeDB->hasLocalPositionSinceBoot() ? getPositionPrecisionForChannel(0) : 0;
+        userButtonActionsAlertText(text, sizeof(text), outcome == UBA_OUTCOME_ALERT2 ? cfg.alert2_text : cfg.alert_text,
+                                   localPosition, precision, getValidTime(RTCQualityDevice));
+        sendTextBroadcast(text);
         state.limiters[outcome == UBA_OUTCOME_ALERT2].alertSent(state.nowMs);
         if (cfg.alert_with_position)
             sendAdHocPosition(false);
         playFeedback(INPUT_BROKER_USER_PRESS);
         break;
+    }
     case UBA_OUTCOME_POSITION:
         LOG_INFO("User button: send position");
         sendAdHocPosition(true);
