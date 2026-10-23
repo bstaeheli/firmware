@@ -479,7 +479,41 @@ static void test_alert_without_position_sharing_is_plain()
     TEST_ASSERT_EQUAL_STRING("\aHELP", alertText(fix(), 0));
     meshtastic_Position p = fix();
     p.latitude_i = p.longitude_i = 0;
-    TEST_ASSERT_EQUAL_STRING("\aHELP", alertText(p, 32)); // no fix
+    TEST_ASSERT_EQUAL_STRING("\aHELP", alertText(p, 0)); // position withheld on purpose: no note
+}
+
+static void test_alert_without_fix_says_so()
+{
+    meshtastic_Position p = fix();
+    p.latitude_i = p.longitude_i = 0;
+    TEST_ASSERT_EQUAL_STRING("\aHELP no GPS fix", alertText(p, 32));
+    TEST_ASSERT_EQUAL_STRING("\aSOS no GPS fix", alertText(p, 16, 1000000, "\aSOS"));
+}
+
+static void test_last_fix_survives_lost_lock()
+{
+    meshtastic_Position last = meshtastic_Position_init_default;
+    meshtastic_Position lost = meshtastic_Position_init_default;
+    userButtonActionsRememberFix(last, fix(), true);
+    TEST_ASSERT_EQUAL(473769000, last.latitude_i);
+    userButtonActionsRememberFix(last, lost, true); // GPS lost lock: localPosition cleared
+    TEST_ASSERT_EQUAL(473769000, last.latitude_i);
+    TEST_ASSERT_EQUAL(1000000, last.timestamp);
+    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
+                             "25m 7min old",
+                             alertText(last, 32, 1000000 + 7 * 60));
+    meshtastic_Position newer = fix();
+    newer.timestamp = 1000500;
+    userButtonActionsRememberFix(last, newer, true);
+    TEST_ASSERT_EQUAL(1000500, last.timestamp);
+}
+
+static void test_last_fix_forgotten_without_fix_since_boot()
+{
+    meshtastic_Position last = fix();
+    userButtonActionsRememberFix(last, fix(), false); // e.g. a position saved before reboot or a cleared node DB
+    TEST_ASSERT_EQUAL(0, last.latitude_i);
+    TEST_ASSERT_EQUAL(0, last.longitude_i);
 }
 
 static void test_alert_link_respects_channel_precision()
@@ -496,12 +530,21 @@ static void test_alert_link_respects_channel_precision()
                              alertText(fix(0), 16)); // radius shown even without DOP
 }
 
+static const char *repeatX(size_t n)
+{
+    static char text[256];
+    memset(text, 'x', n);
+    text[n] = 0;
+    return text;
+}
+
 static void test_alert_link_dropped_when_too_long()
 {
-    char alert[meshtastic_Constants_DATA_PAYLOAD_LEN - 20];
-    memset(alert, 'x', sizeof(alert) - 1);
-    alert[sizeof(alert) - 1] = 0;
-    TEST_ASSERT_EQUAL_STRING(alert, alertText(fix(), 32, 1000000, alert));
+    // The link of fix() is 39 bytes; Router needs room for its Data fields, so stay at UBA_MAX_TEXT_LEN
+    TEST_ASSERT_EQUAL(UBA_MAX_TEXT_LEN, strlen(alertText(fix(), 32, 1000000, repeatX(UBA_MAX_TEXT_LEN - 39))));
+    TEST_ASSERT_EQUAL_STRING(repeatX(UBA_MAX_TEXT_LEN - 38), alertText(fix(), 32, 1000000, repeatX(UBA_MAX_TEXT_LEN - 38)));
+    TEST_ASSERT_EQUAL_STRING(repeatX(UBA_MAX_TEXT_LEN + 10), alertText(fix(), 32, 1000000, repeatX(UBA_MAX_TEXT_LEN + 10)));
+    TEST_ASSERT_TRUE(UBA_MAX_TEXT_LEN + 7 <= meshtastic_Constants_DATA_PAYLOAD_LEN); // Data encoding overhead
     char small[16];
     TEST_ASSERT_EQUAL(5, userButtonActionsAlertText(small, sizeof(small), "\aHELP", fix(), 32, 1000000));
     TEST_ASSERT_EQUAL_STRING("\aHELP", small);
@@ -562,6 +605,9 @@ void setup()
     RUN_TEST(test_alert_accuracy_from_hdop_or_pdop);
     RUN_TEST(test_alert_link_shows_age_of_old_fix);
     RUN_TEST(test_alert_without_position_sharing_is_plain);
+    RUN_TEST(test_alert_without_fix_says_so);
+    RUN_TEST(test_last_fix_survives_lost_lock);
+    RUN_TEST(test_last_fix_forgotten_without_fix_since_boot);
     RUN_TEST(test_alert_link_respects_channel_precision);
     RUN_TEST(test_alert_link_dropped_when_too_long);
     exit(UNITY_END());

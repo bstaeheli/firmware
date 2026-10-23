@@ -268,15 +268,36 @@ inline uint8_t userButtonActionsMapZoom(uint32_t accuracyM)
     return zoom;
 }
 
+// Text bytes that always fit a packet: Router adds the Data fields (port, length, bitfield) to the payload
+static const size_t UBA_MAX_TEXT_LEN = 200;
+
+// Keeps the last fix since boot: GPS.cpp/MeshService clear localPosition when the GPS loses lock
+inline void userButtonActionsRememberFix(meshtastic_Position &lastFix, const meshtastic_Position &current, bool fixSinceBoot)
+{
+    if (!fixSinceBoot)
+        lastFix = meshtastic_Position_init_default;
+    else if (current.latitude_i || current.longitude_i)
+        lastFix = current;
+}
+
 // Alert text plus a map link to the position as the position packet would reveal it, e.g.
-// "\aHELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old". precision: channel position_precision, 0 = no link.
-// nowSecs: valid time, 0 = unknown. The link is left out if it does not fit. Returns the text length.
+// "\aHELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old", or "\aHELP no GPS fix" without a position.
+// precision: channel position_precision, 0 = plain text. nowSecs: valid time, 0 = unknown.
+// The suffix is left out if the text would exceed UBA_MAX_TEXT_LEN; the alert is never cut. Returns the text length.
 inline size_t userButtonActionsAlertText(char *buf, size_t size, const char *alert, meshtastic_Position pos, uint32_t precision,
                                          uint32_t nowSecs)
 {
-    int len = snprintf(buf, size, "%s", alert);
-    if (len < 0 || (size_t)len >= size || !precision || (!pos.latitude_i && !pos.longitude_i))
+    const int len = snprintf(buf, size, "%s", alert);
+    auto append = [&](const char *suffix) {
+        const size_t total = len + strlen(suffix);
+        if (total < size && total <= UBA_MAX_TEXT_LEN)
+            strcpy(buf + len, suffix);
+        return strlen(buf);
+    };
+    if (len < 0 || (size_t)len >= size || !precision)
         return len < 0 ? 0 : strlen(buf);
+    if (!pos.latitude_i && !pos.longitude_i)
+        return append(" no GPS fix");
 
     // Accuracy ~ 5 m per DOP (1/100 units) rounded to 5 m, at least the radius of the precision cell
     const uint32_t dop = pos.HDOP ? pos.HDOP : pos.PDOP;
@@ -307,9 +328,7 @@ inline size_t userButtonActionsAlertText(char *buf, size_t size, const char *ale
         else
             snprintf(link + n, sizeof(link) - n, " %ud old", (unsigned)(mins / 1440));
     }
-    if ((size_t)len + strlen(link) < size)
-        strcpy(buf + len, link);
-    return strlen(buf);
+    return append(link);
 }
 
 // Runs the configured action. Returns true if the gesture was handled and stock handling must be skipped.

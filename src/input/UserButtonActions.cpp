@@ -5,11 +5,15 @@
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "Router.h"
+#include "TypeConversions.h"
 #include "UserButtonActions.h"
 #include "buzz/BuzzerFeedbackThread.h"
 #include "buzz/buzz.h"
 #include "gps/RTC.h"
 #include "modules/ExternalNotificationModule.h"
+#if !MESHTASTIC_EXCLUDE_GPS
+#include "modules/PositionModule.h"
+#endif
 
 // Same packet construction as CannedMessageModule::sendText, but broadcast on the primary channel without ack
 static void sendTextBroadcast(const char *text)
@@ -30,6 +34,36 @@ static void sendAdHocPosition(bool wantReplies)
 {
     service->refreshLocalMeshNode();
     service->trySendPosition(NODENUM_BROADCAST, wantReplies);
+}
+
+static meshtastic_Position lastFix = meshtastic_Position_init_default;
+
+// Last fix since boot; a fixed position counts as one, like in PositionModule (without an age)
+static void rememberFix()
+{
+    meshtastic_Position current = localPosition;
+    const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(nodeDB->getNodeNum());
+    if (config.position.fixed_position && !current.latitude_i && !current.longitude_i && node) {
+        current = TypeConversions::ConvertToPosition(node->position);
+        current.time = current.timestamp = 0;
+    }
+    userButtonActionsRememberFix(lastFix, current, config.position.fixed_position || nodeDB->hasLocalPositionSinceBoot());
+}
+
+// Position packet with the last fix, also after the GPS lost lock (stock would send none). PositionModule builds it
+// from localPosition with the channel precision, so swap the last fix in for this one packet.
+static void sendLastFix()
+{
+#if !MESHTASTIC_EXCLUDE_GPS
+    if (!positionModule || (!lastFix.latitude_i && !lastFix.longitude_i))
+        return;
+    meshtastic_Position current = localPosition;
+    localPosition = lastFix;
+    service->refreshLocalMeshNode();
+    positionModule->sendOurPosition(NODENUM_BROADCAST, false, 0);
+    current.seq_number = localPosition.seq_number;
+    localPosition = current;
+#endif
 }
 
 // Button feedback as stock would give it for this event (honors buzzer_mode)
@@ -54,6 +88,7 @@ bool userButtonActionsTick(bool buttonPressed, uint32_t holdMs)
 
     if (buttonPressed)
         state.lastPressedMs = millis();
+    rememberFix();
 
     const UserButtonActionsConfig &cfg = userButtonActionsConfig();
     if (!buttonPressed || state.pressConsumed || !cfg.long_press_shutdown_ms)
@@ -101,14 +136,14 @@ bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_
         LOG_INFO("User button: send alert level %d", outcome == UBA_OUTCOME_ALERT2 ? 2 : 1);
         // Map link only to what the position packet on the primary channel reveals
         char text[meshtastic_Constants_DATA_PAYLOAD_LEN + 1];
-        const uint32_t precision =
-            cfg.alert_with_position && nodeDB->hasLocalPositionSinceBoot() ? getPositionPrecisionForChannel(0) : 0;
-        userButtonActionsAlertText(text, sizeof(text), outcome == UBA_OUTCOME_ALERT2 ? cfg.alert2_text : cfg.alert_text,
-                                   localPosition, precision, getValidTime(RTCQualityDevice));
+        const uint32_t precision = cfg.alert_with_position ? getPositionPrecisionForChannel(0) : 0;
+        rememberFix();
+        userButtonActionsAlertText(text, sizeof(text), outcome == UBA_OUTCOME_ALERT2 ? cfg.alert2_text : cfg.alert_text, lastFix,
+                                   precision, getValidTime(RTCQualityDevice));
         sendTextBroadcast(text);
         state.limiters[outcome == UBA_OUTCOME_ALERT2].alertSent(state.nowMs);
         if (cfg.alert_with_position)
-            sendAdHocPosition(false);
+            sendLastFix();
         playFeedback(INPUT_BROKER_USER_PRESS);
         break;
     }
